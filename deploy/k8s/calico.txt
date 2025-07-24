@@ -1,0 +1,2 @@
+installl calico on k8s cluster after installing k8s
+kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
