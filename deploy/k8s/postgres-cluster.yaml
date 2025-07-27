@@ -1,0 +1,27 @@
+apiVersion: "acid.zalan.do/v1"
+kind: postgresql
+metadata:
+  name: birthday-pg-cluster
+  namespace: default
+spec:
+  teamId: "birthday-team"
+  volume:
+    size: 10Gi
+    storageClass: gp3
+  numberOfInstances: 3  # 1 writer in onw zone + 2 readers in two different zones
+  users:
+    app_user: []  # For the app Python
+  databases:
+    birthday_db: app_user
+  postgresql:
+    version: "15"
+  patroni:
+    synchronous_mode: true  # Synchronous for consistency
+    synchronous_node_count: 1
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 1
+      podAffinityTerm:
+        topologyKey: "failure-domain.beta.kubernetes.io/zone"  # Multi-AZ eu-west-1a/b/c
+  enableWalArchiving: true
+  walS3Bucket: "hello-birthday-wal-bucket"

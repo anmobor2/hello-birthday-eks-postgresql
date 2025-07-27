@@ -1,13 +1,17 @@
 # Global shared resources that are used across all environments
 
 provider "aws" {
-  region = var.aws_region
-
-  default_tags {
-    tags = {
-      Project     = var.project_name
-      ManagedBy   = "terraform"
-    }
+  region                      = "eu-west-1"
+  access_key                  = "test"
+  secret_key                  = "test"
+  skip_credentials_validation = true
+  skip_metadata_api_check     = true
+  s3_use_path_style           = true  # Para S3 emulado
+  endpoints {
+    s3     = "http://localhost:4566"
+    iam    = "http://localhost:4566"
+    ecr    = "http://localhost:4566"
+    # No EKS endpoint; omite recursos EKS o usa mock
   }
 }
 

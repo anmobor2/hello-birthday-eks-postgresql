@@ -1,0 +1,25 @@
+apiVersion: "acid.zalan.do/v1"
+kind: postgresql
+metadata:
+  name: birthday-pg-standby
+  namespace: default
+spec:
+  teamId: "birthday-team"
+  volume:
+    size: 10Gi
+    storageClass: gp3
+  numberOfInstances: 2  # Readers only
+  standby:
+    s3_wal_path: "s3://hello-birthday-wal-bucket/path/to/wal/"
+  postgresql:
+    version: "15"
+  patroni:
+    synchronous_mode: false  # ASynchronous cross-region
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 1
+        podAffinityTerm:
+          topologyKey: "failure-domain.beta.kubernetes.io/zone"
+          labelSelector:
+            matchLabels:
+              app: birthday-pg-standby

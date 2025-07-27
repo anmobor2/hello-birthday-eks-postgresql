@@ -19,3 +19,5 @@ variable "common_tags" {
     Owner       = "infrastructure-team"
   }
 }
+
+variable "local_test" { default = false }

@@ -358,15 +358,31 @@ jobs:
       - name: Setup kubectl
         uses: azure/setup-kubectl@v4
 
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.13.3'  # Usa versión estable
+
       - name: Update kubeconfig for EKS
         run: |
           aws eks update-kubeconfig \
             --region ${{ env.AWS_REGION }} \
             --name happybirthday-cluster
 
+      - name: Install Zalando Postgres Operator
+        run: |
+          helm repo add postgres-operator-charts https://opensource.zalando.com/postgres-operator/charts/postgres-operator
+          helm repo update
+          helm install postgres-operator postgres-operator-charts/postgres-operator --namespace default
+
+      - name: Deploy Postgres Cluster
+        run: |
+          kubectl apply -f deploy/k8s/postgres-cluster.yaml  # Primary HA cluster
+          # kubectl apply -f deploy/k8s/standby-cluster.yaml  # Standby si multi-region; comenta si no
+
       - name: Deploy to EKS
         run: |
-          kubectl apply -f deploy/k8s/
+          kubectl apply -f deploy/k8s/  # App manifests (Deployment, Service, etc.)
 
   integration_tests:
     name: Run Integration Tests
