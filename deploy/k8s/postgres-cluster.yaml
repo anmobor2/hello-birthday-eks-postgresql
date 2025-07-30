@@ -6,22 +6,72 @@ metadata:
 spec:
   teamId: "birthday-team"
   volume:
-    size: 10Gi
-    storageClass: gp3
-  numberOfInstances: 3  # 1 writer in onw zone + 2 readers in two different zones
+    size: 50Gi  # Increased for banking-grade prod
+    storageClass: gp3  # AWS EBS gp3 for high performance
+  numberOfInstances: 3  # 1 primary writer + 2 replica readers
   users:
-    app_user: []  # For the app Python
+    app_user: []  # For Python app
+    admin:  # For management
+      - superuser
+      - createdb
   databases:
-    birthday_db: app_user
+    birthday_db: app_user  # App-specific DB
   postgresql:
-    version: "15"
+    version: "15"  # Latest stable in 2025
+  enableLogicalBackup: true  # Logical backups to S3
+  enableWalArchiving: true
+  walS3Bucket: "hello-birthday-wal-bucket"  # For DR to eu-west-3
   patroni:
-    synchronous_mode: true  # Synchronous for consistency
-    synchronous_node_count: 1
+    initdb:
+      encoding: "UTF8"
+      locale: "en_US.UTF-8"
+    pg_hba:  # Secure access control
+      - "hostssl birthday_db app_user 10.0.0.0/16 md5"  # Restrict to VPC CIDR
+      - "hostssl all admin 10.0.0.0/16 md5"
+      - "local all all peer"
+      - "host replication all 10.0.0.0/16 md5"
+    synchronous_mode: true  # Synchronous replication for consistency
+    synchronous_node_count: 1  # At least 1 replica confirms writes
+    slots: {}  # Auto-managed replication slots
+    ttl: 30  # Leader lease duration
+    loop_wait: 10  # Patroni check interval
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2"
+      memory: "4Gi"
   podAntiAffinity:
     preferredDuringSchedulingIgnoredDuringExecution:
-    - weight: 1
+    - weight: 100
       podAffinityTerm:
-        topologyKey: "failure-domain.beta.kubernetes.io/zone"  # Multi-AZ eu-west-1a/b/c
-  enableWalArchiving: true
-  walS3Bucket: "hello-birthday-wal-bucket"
+        labelSelector:
+          matchExpressions:
+          - key: "spilo-role"
+            operator: In
+            values:
+            - "master"
+            - "replica"
+        topologyKey: "failure-domain.beta.kubernetes.io/zone"  # Distributes across eu-west-1a/b/c
+  sidecars:  # Add monitoring
+  - name: postgres-exporter
+    image: prometheuscommunity/postgres-exporter:latest
+    env:
+    - name: DATA_SOURCE_NAME
+      value: "postgresql://admin:admin@127.0.0.1:5432/birthday_db?sslmode=disable"
+    ports:
+    - name: metrics
+      containerPort: 9187
+  enableConnectionPooler: true  # PgBouncer for scalability
+  connectionPooler:
+    numberOfInstances: 2
+    schema: pooler
+    mode: transaction
+    resources:
+      requests:
+        cpu: "200m"
+        memory: "512Mi"
+      limits:
+        cpu: "1"
+        memory: "1Gi"
