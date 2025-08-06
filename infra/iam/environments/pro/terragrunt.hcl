@@ -21,7 +21,7 @@ locals {
 
 inputs = {
   role_name        = "github-actions-role-pro"
-  github_repo      = "mi-usuario/hello-birthday-eks-postgresql"
+  github_repo      = "anmobor2/hello-birthday-eks-postgresql"
   role_policy_json = local.policy
 
   tags = {
