@@ -1,6 +1,6 @@
 #!/bin/bash
 
-IMAGE_NAME="orona-cdk-appy"
+IMAGE_NAME="
 if [ -z "$AWS_ACCOUNT_ID" ] || [ -z "$AWS_REGION" ]; then
   echo "Please set the AWS_ACCOUNT_ID and AWS_REGION environment variables."
   exit 1

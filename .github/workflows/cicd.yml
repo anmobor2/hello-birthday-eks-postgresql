@@ -1,0 +1,260 @@
+# Ubicación: .github/workflows/cicd.yml
+#
+# WORKFLOW DE DEVSECOPS COMPLETO
+#
+# Este workflow implementa un ciclo de CI/CD/IaC profesional, incorporando
+# análisis de calidad de código y escaneo de seguridad.
+#
+# Fases:
+# 1. Test & Quality: Linting, tests unitarios y análisis de SonarQube.
+# 2. Build & Scan: Construcción de la imagen Docker y escaneo de vulnerabilidades con Trivy.
+# 3. Publish: Publicación de la imagen Docker y el Helm Chart en ECR (OCI).
+# 4. Deploy Infra: Despliegue de la infraestructura base con Terragrunt.
+# 5. Deploy App: Despliegue de la aplicación en EKS usando el Helm Chart desde el registro.
+
+name: DevSecOps CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+
+jobs:
+  # ======================================================================================
+  # FASE 1: TEST & LINT
+  # ======================================================================================
+  lint-and-test:
+    name: Lint & Test Python App
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install -r app/requirements-dev.txt
+      - name: Run tests with pytest
+        run: pytest app/tests/
+
+  # ======================================================================================
+  # FASE 1: ANÁLISIS DE CALIDAD DE CÓDIGO
+  # ======================================================================================
+  code-quality-sonar:
+    name: SonarQube Code Quality
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0 # Necesario para un análisis de SonarQube preciso
+      - name: SonarQube Scan
+        uses: sonarsource/sonarqube-scan-action@master
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+  # ======================================================================================
+  # FASE 2: CONSTRUCCIÓN DE IMAGEN DOCKER
+  # ======================================================================================
+  build-docker-image:
+    name: Build Docker Image
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      image_tag: ${{ steps.tag.outputs.tag }}
+      ecr_repo: ${{ steps.environment.outputs.ecr_repo }}
+      ecr_registry: ${{ steps.login-ecr.outputs.registry }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Determine Environment
+        id: environment
+        run: |
+          # ... (código para determinar el entorno, igual que antes) ...
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "env=pro" >> $GITHUB_OUTPUT
+            echo "aws_region=eu-west-1" >> $GITHUB_OUTPUT
+            echo "ecr_repo=hello-birthday-pro" >> $GITHUB_OUTPUT
+          else
+            echo "env=staging" >> $GITHUB_OUTPUT
+            echo "aws_region=eu-west-1" >> $GITHUB_OUTPUT
+            echo "ecr_repo=hello-birthday-staging" >> $GITHUB_OUTPUT
+          fi
+      - name: Define Image Tag
+        id: tag
+        run: echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: ${{ secrets.AWS_IAM_ROLE_ARN }}
+          aws-region: ${{ steps.environment.outputs.aws_region }}
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+      - name: Build Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ steps.environment.outputs.ecr_repo }}
+          IMAGE_TAG: ${{ steps.tag.outputs.tag }}
+        run: docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG ./app
+
+  # ======================================================================================
+  # FASE 2: ESCANEO DE SEGURIDAD DE LA IMAGEN
+  # ======================================================================================
+  security-scan-trivy:
+    name: Trivy Image Scan
+    needs: build-docker-image
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ needs.build-docker-image.outputs.ecr_registry }}/${{ needs.build-docker-image.outputs.ecr_repo }}:${{ needs.build-docker-image.outputs.image_tag }}'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+  # ======================================================================================
+  # FASE 3: PUBLICACIÓN DE ARTEFACTOS
+  # ======================================================================================
+  publish-artifacts:
+    name: Publish Artifacts to ECR
+    needs: [security-scan-trivy, code-quality-sonar]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: ${{ secrets.AWS_IAM_ROLE_ARN }}
+          aws-region: 'eu-west-1'
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+      - name: Push Docker Image
+        env:
+          ECR_REGISTRY: ${{ needs.build-docker-image.outputs.ecr_registry }}
+          ECR_REPOSITORY: ${{ needs.build-docker-image.outputs.ecr_repo }}
+          IMAGE_TAG: ${{ needs.build-docker-image.outputs.image_tag }}
+        run: docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+      - name: Package and Push Helm Chart to ECR
+        env:
+          ECR_REGISTRY_ALIAS: ${{ steps.login-ecr.outputs.registry_alias }}
+          ECR_REPOSITORY: ${{ needs.build-docker-image.outputs.ecr_repo }}
+          CHART_VERSION: 1.0.${{ github.run_number }}
+        run: |
+          helm package ./kubernetes/helm-charts/hello-birthday --version $CHART_VERSION
+          helm push hello-birthday-$CHART_VERSION.tgz oci://$ECR_REGISTRY_ALIAS/$ECR_REPOSITORY
+
+  # ======================================================================================
+  # FASE 4: DESPLIEGUE DE INFRAESTRUCTURA
+  # ======================================================================================
+  deploy-infrastructure:
+    name: Deploy Infrastructure
+    runs-on: ubuntu-latest
+    # ... (contenido del job igual que antes) ...
+    permissions:
+      id-token: write
+      contents: read
+    environment:
+      name: ${{ github.ref == 'refs/heads/main' && 'production' || 'staging' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Setup Terragrunt
+        uses: gruntwork-io/setup-terragrunt@v1
+      - name: Determine Environment
+        id: environment
+        run: |
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "env=pro" >> $GITHUB_OUTPUT
+            echo "aws_region=eu-west-1" >> $GITHUB_OUTPUT
+          else
+            echo "env=staging" >> $GITHUB_OUTPUT
+            echo "aws_region=eu-west-1" >> $GITHUB_OUTPUT
+          fi
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: ${{ secrets.AWS_IAM_ROLE_ARN }}
+          aws-region: ${{ steps.environment.outputs.aws_region }}
+      - name: Terragrunt Apply
+        if: github.event_name != 'pull_request'
+        run: |
+          cd infra
+          terragrunt run-all apply --terragrunt-non-interactive -auto-approve
+
+  # ======================================================================================
+  # FASE 5: DESPLIEGUE DE APLICACIÓN
+  # ======================================================================================
+  deploy-application:
+    name: Deploy Application to EKS
+    needs: [publish-artifacts, deploy-infrastructure]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    environment:
+      name: ${{ github.ref == 'refs/heads/main' && 'production' || 'staging' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Determine Environment
+        id: environment
+        run: |
+          # ... (código para determinar el entorno, igual que antes) ...
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "env=pro" >> $GITHUB_OUTPUT
+            echo "aws_region=eu-west-1" >> $GITHUB_OUTPUT
+            echo "cluster_name=eks-pro-birthday" >> $GITHUB_OUTPUT
+          else
+            echo "env=staging" >> $GITHUB_OUTPUT
+            echo "aws_region=eu-west-1" >> $GITHUB_OUTPUT
+            echo "cluster_name=eks-staging-birthday" >> $GITHUB_OUTPUT
+          fi
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: ${{ secrets.AWS_IAM_ROLE_ARN }}
+          aws-region: ${{ steps.environment.outputs.aws_region }}
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+      - name: Setup Kubeconfig for EKS
+        run: aws eks update-kubeconfig --name ${{ steps.environment.outputs.cluster_name }} --region ${{ steps.environment.outputs.aws_region }}
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+      - name: Deploy with Helm from OCI Registry
+        env:
+          ECR_REGISTRY_ALIAS: ${{ steps.login-ecr.outputs.registry_alias }}
+          ECR_REPOSITORY: ${{ needs.build-docker-image.outputs.ecr_repo }}
+          CHART_VERSION: 1.0.${{ github.run_number }}
+        run: |
+          helm upgrade --install hello-birthday-app oci://$ECR_REGISTRY_ALIAS/$ECR_REPOSITORY/hello-birthday \
+            --version $CHART_VERSION \
+            --namespace default \
+            --values ./kubernetes/helm-charts/hello-birthday/values-${{ steps.environment.outputs.env }}.yaml \
+            --wait

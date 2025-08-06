@@ -1,0 +1,36 @@
+# Template for the custom PostgreSQL resource that the Zalando operator will use
+# will be used to create and manage our database cluster.
+{{- if .Values.postgres.enabled }}
+apiVersion: "acid.zalan.do/v1"
+kind: postgresql
+metadata:
+  name: {{ include "hello-birthday.fullname" . }}-pg
+  labels:
+    team: {{ .Values.postgres.teamId }}
+spec:
+  teamId: {{ .Values.postgres.teamId }}
+  volume:
+    size: {{ .Values.postgres.volumeSize }}
+  numberOfInstances: {{ .Values.postgres.replicas }}
+  users:
+    # The operator will create a user birthday_user with a randomly generated password.
+    # and will store it in a Kubernetes Secret.
+    birthday_user:
+    - superuser
+    - createdb
+  databases:
+    birthdaydb: birthday_user # Creates the database birthdaydb and assigns the owner.
+  postgresql:
+    version: "{{ .Values.postgres.version }}"
+
+  # Continuous backup configuration to S3
+  enableWALGS3Backup: true
+  additionalVolumes:
+    - name: wal-g-s3-credentials
+      secret:
+        secretName: postgres-s3-credentials
+
+  # Configuration for replication in another region (standby cluster)
+  standby:
+    s3_wal_path: "s3://{{ .Values.postgres.s3WalBucket }}/wal-archive/"
+{{- end }}

@@ -28,20 +28,17 @@ async def update_user(
             detail="El nombre de usuario debe contener solo letras"
         )
 
-    # Verificar si el usuario ya existe
     db_user = db.query(User).filter(User.username == username).first()
 
-    if db_user:
-        # Actualizar usuario existente
-        db_user.date_of_birth = user_data.dateOfBirth
-    else:
-        # Crear nuevo usuario
-        db_user = User(username=username, date_of_birth=user_data.dateOfBirth)
+    if not db_user:
+        db_user = User(username=username)
         db.add(db_user)
+
+    db_user.date_of_birth = user_data.dateOfBirth
 
     db.commit()
     db.refresh(db_user)
-    return None  # Retorna 204 No Content
+    return None
 
 
 @router.get("/hello/{username}", response_model=Dict[str, str])

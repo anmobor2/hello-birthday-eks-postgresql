@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Request
+from prometheus_fastapi_instrumentator import Instrumentator
 from fastapi.responses import JSONResponse
 import logging
 from app.api import hello
@@ -12,15 +13,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Obtener configuración
+# get configurations
 settings = get_settings()
 
-# Crear la aplicación FastAPI
+# create the FastAPI app
 app = FastAPI(
     title=settings.APP_NAME,
-    description="API Hello Birthday - Una API simple para guardar y consultar cumpleaños",
+    description="API Hello Birthday - a simple Api to save and consult birthdays",
     version="1.0.0",
 )
+
+# Instrumentar la aplicación para exponer métricas de Prometheus
+@app.on_event("startup")
+async def startup_instrumentator():
+    Instrumentator().instrument(app).expose(app)
 
 # Manejador de excepciones global
 @app.exception_handler(Exception)
