@@ -18,15 +18,16 @@ spec:
         # Annotation for the OpenTelemetry collector to discover this pod
         app.kubernetes.io/name: hello-birthday
     spec:
-      {{- with .Values.affinity }}
+      # --- UPDATED SECTION to use values from the 'app' key ---
+      {{- with .Values.app.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.nodeSelector }}
+      {{- with .Values.app.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.tolerations }}
+      {{- with .Values.app.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}

@@ -1,5 +1,5 @@
-# Template for the custom PostgreSQL resource that the Zalando operator will use
-# will be used to create and manage our database cluster.
+# Template for the PostgreSQL custom resource that the Zalando operator
+# will use to create and manage our database cluster.
 {{- if .Values.postgres.enabled }}
 apiVersion: "acid.zalan.do/v1"
 kind: postgresql
@@ -12,25 +12,102 @@ spec:
   volume:
     size: {{ .Values.postgres.volumeSize }}
   numberOfInstances: {{ .Values.postgres.replicas }}
+
+  # --- UPDATED SECTION to apply scheduling to PostgreSQL ---
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: workload
+          operator: In
+          values:
+          - database
+
+  tolerations:
+  {{- toYaml .Values.postgres.scheduling.tolerations | nindent 2 }}
+
+  affinity:
+    podAntiAffinity:
+  {{- toYaml .Values.postgres.scheduling.affinity.podAntiAffinity | nindent 6 }}
+
   users:
-    # The operator will create a user birthday_user with a randomly generated password.
-    # and will store it in a Kubernetes Secret.
+    # The operator will create a 'birthday_user' with a random password
+    # and store it in a Kubernetes Secret.
     birthday_user:
     - superuser
     - createdb
   databases:
-    birthdaydb: birthday_user # Creates the database birthdaydb and assigns the owner.
+    birthdaydb: birthday_user # Creates the 'birthdaydb' DB and assigns the owner
   postgresql:
     version: "{{ .Values.postgres.version }}"
 
-  # Continuous backup configuration to S3
+  # Resource Requests and Limits to guarantee Quality of Service.
+  resources:
+    requests:
+      cpu: {{ .Values.postgres.resources.requests.cpu }}
+      memory: {{ .Values.postgres.resources.requests.memory }}
+    limits:
+      cpu: {{ .Values.postgres.resources.limits.cpu }}
+      memory: {{ .Values.postgres.resources.limits.memory }}
+
+  # Connection pooler to protect the database.
+  {{- if .Values.postgres.connectionPooler.enabled }}
+  enableConnectionPooler: true
+  connectionPooler:
+    numberOfInstances: {{ .Values.postgres.connectionPooler.numberOfInstances }}
+    mode: {{ .Values.postgres.connectionPooler.mode }}
+    user: {{ .Values.postgres.connectionPooler.user }}
+    resources:
+      requests:
+        cpu: {{ .Values.postgres.connectionPooler.resources.requests.cpu }}
+        memory: {{ .Values.postgres.connectionPooler.resources.requests.memory }}
+      limits:
+        cpu: {{ .Values.postgres.connectionPooler.resources.limits.cpu }}
+        memory: {{ .Values.postgres.connectionPooler.resources.limits.memory }}
+  {{- end }}
+
+  # Sidecar to export metrics to Prometheus.
+  {{- if .Values.postgres.monitoring.enabled }}
+  sidecars:
+  - name: postgres-exporter
+    image: quay.io/prometheus-community/postgres-exporter:v0.12.0
+    env:
+    - name: DATA_SOURCE_URI
+      value: "localhost/postgres?sslmode=disable"
+    ports:
+    - name: metrics
+      containerPort: 9187
+    resources:
+      requests:
+        cpu: 100m
+        memory: 100Mi
+      limits:
+        cpu: 200m
+        memory: 200Mi
+  {{- end }}
+
+  # Configuration for continuous backup to S3.
   enableWALGS3Backup: true
   additionalVolumes:
     - name: wal-g-s3-credentials
       secret:
         secretName: postgres-s3-credentials
 
-  # Configuration for replication in another region (standby cluster)
+  # Configuration for the cross-region replica (standby cluster).
   standby:
     s3_wal_path: "s3://{{ .Values.postgres.s3WalBucket }}/wal-archive/"
+---
+# Pod Disruption Budget to protect the DB cluster.
+{{- if .Values.postgres.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "hello-birthday.fullname" . }}-pg-pdb
+spec:
+  maxUnavailable: {{ .Values.postgres.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      application: spilo
+      cluster-name: {{ include "hello-birthday.fullname" . }}-pg
+{{- end }}
 {{- end }}
