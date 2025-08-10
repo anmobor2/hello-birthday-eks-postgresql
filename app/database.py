@@ -1,22 +1,26 @@
 from sqlalchemy import create_engine
-from sqlalchemy.orm import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import declarative_base, sessionmaker
+
 from app.config import get_settings
 
 settings = get_settings()
+db_url = settings.db_url
 
-# Crear el motor de base de datos
-engine = create_engine(
-    settings.db_url, connect_args={"check_same_thread": False}
-)
+# Only add SQLite-specific connect_args when needed
+connect_args = {}
+if db_url.startswith("sqlite"):
+    # Needed for SQLite when used with multiple threads (e.g., uvicorn reload)
+    connect_args = {"check_same_thread": False}
 
-# Crear una sesión local
+# Create engine and session factory
+engine = create_engine(db_url, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# Clase base para los modelos
+# Declarative base
 Base = declarative_base()
 
-# Función para obtener una sesión de base de datos
+
+# Dependency to get DB session per request
 def get_db():
     db = SessionLocal()
     try:
@@ -24,6 +28,7 @@ def get_db():
     finally:
         db.close()
 
-# Función para inicializar la base de datos
+
+# Initialize DB schema (used at startup)
 def init_db():
     Base.metadata.create_all(bind=engine)

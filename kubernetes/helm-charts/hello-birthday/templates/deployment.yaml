@@ -15,10 +15,19 @@ spec:
       labels:
         {{- include "hello-birthday.selectorLabels" . | nindent 8 }}
       annotations:
-        # Annotation for the OpenTelemetry collector to discover this pod
+        # Annotation used by ADOT (Prometheus receiver) relabel_configs to discover this pod
         app.kubernetes.io/name: hello-birthday
     spec:
-      # --- UPDATED SECTION to use values from the 'app' key ---
+      # --- Pod security context (hardened) ---
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+
+      # --- Scheduling from values.app.* ---
       {{- with .Values.app.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
@@ -31,19 +40,70 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+
+          # --- Container security context (hardened) ---
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
           ports:
             - name: http
               containerPort: 8000 # The port exposed by the app in the Dockerfile
               protocol: TCP
+
+          # --- Health probes ---
           livenessProbe:
             httpGet:
               path: /health
               port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
           readinessProbe:
             httpGet:
               path: /health
               port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 3
+
+          # --- Environment variables ---
+          env:
+            # Use app.environment from values (default to "production" for cluster).
+            - name: APP_ENVIRONMENT
+              value: {{ default "production" .Values.app.environment | quote }}
+
+            # DATABASE_URL from Zalando Operator Secret if Postgres is enabled; otherwise optional override.
+            {{- if .Values.postgres.enabled }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hello-birthday.fullname" . }}-pg.birthday-team.credentials.postgresql.acid.zalan.do
+                  key: uri
+            {{- else if .Values.app.databaseUrl }}
+            - name: DATABASE_URL
+              value: {{ .Values.app.databaseUrl | quote }}
+            {{- end }}
+
+          # --- Resources from values (recommended in production) ---
+          {{- with .Values.app.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+
+          # If your app writes temporary files, you can mount an emptyDir volume instead of root FS:
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+      # Volumes (tmp scratch space to support readOnlyRootFilesystem)
+      volumes:
+        - name: tmp
+          emptyDir: {}

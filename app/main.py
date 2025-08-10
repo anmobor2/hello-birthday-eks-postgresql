@@ -23,10 +23,9 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Instrumentar la aplicación para exponer métricas de Prometheus
-@app.on_event("startup")
-async def startup_instrumentator():
-    Instrumentator().instrument(app).expose(app)
+# ✅ Instrumentar la aplicación para exponer métricas de Prometheus
+#    (antes de que arranque, fuera de los eventos on_event)
+Instrumentator().instrument(app).expose(app)
 
 # Manejador de excepciones global
 @app.exception_handler(Exception)

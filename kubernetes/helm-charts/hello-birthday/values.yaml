@@ -2,7 +2,7 @@
 replicaCount: 1
 
 image:
-  repository: # To be filled in by the pipeline
+  repository: "" # To be filled in by the pipeline
   pullPolicy: IfNotPresent
   tag: "" # To be filled in by the pipeline
 
@@ -11,23 +11,22 @@ service:
   port: 80
 
 # --- Advanced Scheduling for the Application ---
-# (Usually, the stateless app doesn't need dedicated nodes, but the option is here)
+# Usually, a stateless app doesn't need dedicated nodes, but the option is here.
 app:
   nodeSelector: {}
   tolerations: []
   affinity:
     podAntiAffinity:
       preferredDuringSchedulingIgnoredDuringExecution:
-      - weight: 100
-        podAffinityTerm:
-          labelSelector:
-            matchExpressions:
-            - key: app.kubernetes.io/name
-              operator: In
-              values:
-              - hello-birthday
-          topologyKey: "topology.kubernetes.io/zone"
-
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                    - hello-birthday
+            topologyKey: "topology.kubernetes.io/zone"
 
 # --- Database Configuration (Postgres with Zalando Operator) ---
 postgres:
@@ -38,35 +37,29 @@ postgres:
   s3WalBucket: "" # To be filled in by the pipeline
   teamId: "birthday-team"
 
-  # --- NEW: Advanced Scheduling for the Database ---
-  # This configuration ensures the DB pods run on dedicated nodes.
+  # Advanced scheduling to ensure DB pods run on dedicated nodes
   scheduling:
-    # Forces pods to run on nodes with this label.
     nodeSelector:
       workload: database
-
-    # Allows pods to run on nodes with "taints".
     tolerations:
-    - key: "workload"
-      operator: "Equal"
-      value: "database"
-      effect: "NoSchedule"
-
-    # Maintains high-availability dispersion within the dedicated nodes.
+      - key: "workload"
+        operator: "Equal"
+        value: "database"
+        effect: "NoSchedule"
     affinity:
       podAntiAffinity:
         preferredDuringSchedulingIgnoredDuringExecution:
-        - weight: 100
-          podAffinityTerm:
-            labelSelector:
-              matchExpressions:
-              - key: application
-                operator: In
-                values:
-                - spilo
-            topologyKey: "topology.kubernetes.io/zone"
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                  - key: application
+                    operator: In
+                    values:
+                      - spilo
+              topologyKey: "topology.kubernetes.io/zone"
 
-  # Resource Requests and Limits (CRITICAL FOR PRODUCTION!)
+  # Resource requests and limits (critical for production)
   resources:
     requests:
       cpu: "500m"
@@ -75,7 +68,7 @@ postgres:
       cpu: "1"
       memory: "2Gi"
 
-  # Pod Disruption Budget for High Availability
+  # Pod Disruption Budget for high availability
   podDisruptionBudget:
     enabled: true
     maxUnavailable: 1
@@ -94,77 +87,101 @@ postgres:
         cpu: "200m"
         memory: "200Mi"
 
-  # Enable the metrics sidecar for Prometheus
+  # Enable metrics sidecar for Prometheus
   monitoring:
     enabled: true
 
-
 # --- OpenTelemetry (ADOT) Collector Configuration ---
-# Configuration for the ADOT sub-chart (inheritance mechanism)
+# This configuration enables the ADOT collector sub-chart for metrics/logs export.
 adot:
-  enabled: true # sub-chart is enabled
-  roleArn: "" # fill in from pipeline
-  prometheusEndpoint: "" # fill in from pipeline
-  s3LogsBucket: "" # fill in from pipeline
+  enabled: true
+  roleArn: "" # To be filled in by the pipeline (IAM Role for ADOT)
+  prometheusEndpoint: "" # To be filled in by the pipeline (AMP remote_write endpoint)
+  s3LogsBucket: "" # To be filled in by the pipeline (S3 bucket for logs)
 
-  # Collector configuration
   collector:
-    # The collector will run as a Deployment in the cluster.
     daemonSet: false
     deployment: true
 
-    # Service Account configuration for the collector
+    # Service Account for IRSA binding
     serviceAccount:
       create: true
-      name: "adot-collector-sa" # Must match the name in the IAM role in Terraform
+      name: "adot-collector-sa"
       annotations:
-        # This annotation binds the service account to the IAM role
-        eks.amazonaws.com/role-arn: "" # fill in from pipeline
+        eks.amazonaws.com/role-arn: "" # Must match roleArn
 
-    # Collector configuration itself
-    # Here the telemetry pipelines are defined: receivers, processors, exporters.
     config:
-      # Exporters: where to send the data?
+      # Exporters: destinations for telemetry data
       exporters:
         awsprometheusremotewrite:
-          # The URL of the prometheus remote write endpoint.
-          # Will be filled in from the pipeline.
-          endpoint: ""
+          endpoint: "" # AMP workspace endpoint
         awss3:
           aws_sdk:
             region: "eu-west-1"
             s3_force_path_style: true
           s3_uploader:
-            s3_bucket: "" # To be filled in by the pipeline
+            s3_bucket: "" # S3 bucket for logs
             s3_prefix: "logs"
             s3_partition: "minute"
 
-      # Receivers: What data do we want to collect?
+      # Receivers: data sources to scrape/collect
       receivers:
         prometheus:
           config:
             scrape_configs:
+              # --- App metrics ---
               - job_name: 'hello-birthday-app'
                 scrape_interval: 15s
-                # The collector will look for pods with the annotation `app.kubernetes.io/name=hello-birthday`
-                # and will scrape metrics from them.
+                metrics_path: /metrics
                 kubernetes_sd_configs:
                   - role: pod
                 relabel_configs:
-                  - source_labels: [__meta_kubernetes_pod_annotation_app_kubernetes_io_name]
+                  - source_labels: [ __meta_kubernetes_pod_annotation_app_kubernetes_io_name ]
                     action: keep
                     regex: hello-birthday
+                  - source_labels: [ __meta_kubernetes_pod_ready ]
+                    action: keep
+                    regex: "true"
+                  - source_labels: [ __meta_kubernetes_pod_container_port_name ]
+                    action: keep
+                    regex: http
+                  - source_labels: [ __meta_kubernetes_pod_ip, __meta_kubernetes_pod_container_port_number ]
+                    action: replace
+                    target: __address__
+                    replacement: $1:$2
+
+              # --- PostgreSQL metrics (Spilo sidecar) ---
+              - job_name: 'postgresql'
+                scrape_interval: 30s
+                metrics_path: /metrics
+                kubernetes_sd_configs:
+                  - role: pod
+                relabel_configs:
+                  - source_labels: [ __meta_kubernetes_pod_label_application ]
+                    action: keep
+                    regex: spilo
+                  - source_labels: [ __meta_kubernetes_pod_container_port_name ]
+                    action: keep
+                    regex: metrics
+                  - source_labels: [ __meta_kubernetes_pod_ready ]
+                    action: keep
+                    regex: "true"
+                  - source_labels: [ __meta_kubernetes_pod_ip, __meta_kubernetes_pod_container_port_number ]
+                    action: replace
+                    target: __address__
+                    replacement: $1:$2
+
+        # File log receiver for container logs
         filelog:
-          include: [ /var/log/pods/*/*/*.log ] # standard path for container logs in Kubernetes
+          include: [ /var/log/pods/*/*/*.log ]
           start_at: beginning
 
-      # Services: enables the pipelines for the collector
+      # Services: pipelines to connect receivers and exporters
       service:
         pipelines:
           metrics:
             receivers: [ prometheus ]
             exporters: [ awsprometheusremotewrite ]
-
           logs:
             receivers: [ filelog ]
             exporters: [ awss3 ]
@@ -172,18 +189,19 @@ adot:
 # --- Ingress Configuration ---
 ingress:
   enabled: true
-  className: "alb" # Specifies that we want to use the AWS Load Balancer Controller
+  className: "alb" # AWS Load Balancer Controller ingress class
   annotations:
-    # Specific annotations for the AWS Load Balancer Controller
     alb.ingress.kubernetes.io/scheme: internet-facing
     alb.ingress.kubernetes.io/target-type: ip
   hosts:
-    - host: hello-birthday.yourdomain.com # <-- CHANGE THIS!
+    - host: hello-birthday.mydomain.com # Change to your domain
       paths:
-        - path: /
+        - path: /hello
+          pathType: Prefix
+        - path: /health
           pathType: Prefix
   tls: []
 
-# Database Migration Job Configuration
+# --- Database Migration Job Configuration ---
 migrations:
   enabled: true

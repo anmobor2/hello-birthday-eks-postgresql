@@ -1,5 +1,6 @@
-¡Por supuesto! Aquí tienes el README.md general del proyecto en inglés, con toda la sintaxis de Markdown visible para que puedas copiarlo y pegarlo directamente en la raíz de tu repositorio.
-Markdown
+```bash
+uvicorn app.main:app --reload
+```
 
 # Hello Birthday EKS PostgreSQL
 
@@ -132,3 +133,26 @@ graph TD
     E2c -->|Exposes| E2a
     D -->|Automates| E
 ```
+
+### PYTHON APP
+
+curl -X PUT "http://localhost:8000/hello/antonio" \
+  -H "Content-Type: application/json" \
+  -d '{"dateOfBirth":"1990-08-12"}'
+
+curl -s "http://localhost:8000/hello/antonio"
+
+OpenAPI Documentation
+
+Once running, the app exposes the API documentation at:
+
+    Swagger UI: http://localhost:8000/docs
+
+    ReDoc: http://localhost:8000/redoc
+
+#### for productionº
+APP_ENVIRONMENT=production \
+DATABASE_URL="postgresql+psycopg2://user:pass@host:5432/db" \
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+curl -s "http://localhost:8000/hello/antonio"
