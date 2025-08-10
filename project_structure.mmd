@@ -1,0 +1,38 @@
+graph TD
+    A[Project: hello-birthday-eks-postgresql] --> B[infra]
+    A --> C[helm]
+    A --> D[.github/workflows]
+
+    B --> B1[terragrunt.hcl: Backend S3]
+    B --> B2[modules:vpc]
+    B --> B3[modules:eks]
+    B2 --> B2a[main.tf: VPC, NAT Gateway]
+    B3 --> B3a[main.tf: EKS Cluster, EBS CSI Driver]
+
+    C --> C1[Chart.yaml: hello-birthday, Zalando dep]
+    C --> C2[values.yaml]
+    C --> C3[templates]
+    C3 --> C3a[deployment.yaml: App, health probes]
+    C3 --> C3b[service.yaml: ClusterIP]
+    %% Caret line break workaround
+    C3 --> C3c[secrets.yaml]
+    C3 --> C3d[spilo-postgresql.yaml: Zalando/Patroni]
+    C3 --> C3e[ingress.yaml: ALB, TLS]
+    C3 --> C3f[tests]
+
+    D --> D1[main.yml: CI/CD Pipeline]
+    D1 --> D1a[Lint: terraform fmt, helm lint]
+    D1 --> D1b[Build: Docker to ECR]
+    D1 --> D1c[Deploy: helm upgrade]
+    D1 --> D1d[Test: kubectl, DB queries]
+
+    B -->|Creates infrastructure| E[AWS]
+    E --> E1[VPC: Subnets, NAT Gateway]
+    E --> E2[EKS Cluster: Nodes, EBS CSI]
+    C -->|Deploys to| E2
+    E2 --> E2a[App Pods: hello-birthday]
+    E2 --> E2b[PostgreSQL: Zalando/Patroni]
+    E2 --> E2c[Ingress: ALB, TLS]
+    E2a -->|Connects to| E2b
+    E2c -->|Exposes| E2a
+    D -->|Automates| E
