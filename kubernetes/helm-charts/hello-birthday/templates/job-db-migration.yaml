@@ -1,0 +1,38 @@
+# This Job runs as a "Helm Hook" after each installation or upgrade.
+# Its purpose is to apply the migrations to the database.
+{{- if .Values.migrations.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "hello-birthday.fullname" . }}-db-migration
+  labels:
+    {{- include "hello-birthday.labels" . | nindent 4 }}
+  annotations:
+    # This defines the Job as a Helm Hook.
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "1"
+    "helm.sh/hook-delete-policy": hook-succeeded
+spec:
+  template:
+    metadata:
+      labels:
+        {{- include "hello-birthday.selectorLabels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: db-migration
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # The command that runs the migrations.
+          # Make sure Docker image contains the tool
+          command: ["alembic", "upgrade", "head"]
+          env:
+            # Here the environment variables for the database connection would be injected.
+            # usually from a Secret.
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "hello-birthday.fullname" . }}-pg.birthday-team.credentials.postgresql.acid.zalan.do
+                  key: uri
+  backoffLimit: 2
+{{- end }}

@@ -1,16 +1,13 @@
-# Ubicación: .github/workflows/cicd.yml
-#
-# WORKFLOW DE DEVSECOPS COMPLETO
-#
-# Este workflow implementa un ciclo de CI/CD/IaC profesional, incorporando
-# análisis de calidad de código y escaneo de seguridad.
-#
-# Fases:
-# 1. Test & Quality: Linting, tests unitarios y análisis de SonarQube.
-# 2. Build & Scan: Construcción de la imagen Docker y escaneo de vulnerabilidades con Trivy.
-# 3. Publish: Publicación de la imagen Docker y el Helm Chart en ECR (OCI).
-# 4. Deploy Infra: Despliegue de la infraestructura base con Terragrunt.
-# 5. Deploy App: Despliegue de la aplicación en EKS usando el Helm Chart desde el registro.
+# Stages:
+# 1. Test & Quality: Linting, unit tests, and SonarQube analysis.
+# 2. Build & Scan: Docker image build and vulnerability scanning with Trivy.
+# 3. Publish: Publication of the Docker image and Helm Chart to ECR (as OCI).
+# 4. Deploy Infra: Deployment of the base infrastructure with Terragrunt.
+# 5. Deploy App: Deployment of the application to EKS using the Helm Chart from the registry.
+# 6. Test Release: Helm test to verify the deployment.
+# 7. Preview Helm Chart: Generate and comment the Helm template on PRs for review.
+# This GitHub Actions workflow implements a DevSecOps CI/CD pipeline for a Python application
+# deployed on AWS EKS, using Terragrunt for infrastructure management and Helm for application deployment.
 
 name: DevSecOps CI/CD Pipeline
 
@@ -25,9 +22,25 @@ on:
       - develop
 
 jobs:
-  # ======================================================================================
-  # FASE 1: TEST & LINT
-  # ======================================================================================
+  # --- NEW JOB: LINT & VALIDATE INFRA ---
+  lint-validate-infra:
+    name: Lint & Validate IaC
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Setup Terragrunt
+        uses: gruntwork-io/setup-terragrunt@v1
+      - name: Terragrunt Validate
+        run: |
+          cd infra
+          terragrunt run-all validate
+      - name: Terraform Fmt Check
+        run: |
+          cd infra
+          terragrunt run-all fmt --check
+
+  # --- STAGE 1: TEST & LINT ---
   lint-and-test:
     name: Lint & Test Python App
     runs-on: ubuntu-latest
@@ -43,9 +56,7 @@ jobs:
       - name: Run tests with pytest
         run: pytest app/tests/
 
-  # ======================================================================================
-  # FASE 1: ANÁLISIS DE CALIDAD DE CÓDIGO
-  # ======================================================================================
+  # --- STAGE 1: CODE QUALITY ANALYSIS ---
   code-quality-sonar:
     name: SonarQube Code Quality
     needs: lint-and-test
@@ -54,19 +65,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0 # Necesario para un análisis de SonarQube preciso
+          fetch-depth: 0 # Required for an accurate SonarQube analysis
       - name: SonarQube Scan
         uses: sonarsource/sonarqube-scan-action@master
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
-  # ======================================================================================
-  # FASE 2: CONSTRUCCIÓN DE IMAGEN DOCKER
-  # ======================================================================================
+  # --- STAGE 2: DOCKER IMAGE BUILD ---
   build-docker-image:
     name: Build Docker Image
-    needs: lint-and-test
+    needs: [lint-and-test, lint-validate-infra] # Now also depends on IaC validation
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -81,7 +90,6 @@ jobs:
       - name: Determine Environment
         id: environment
         run: |
-          # ... (código para determinar el entorno, igual que antes) ...
           if [ "${{ github.ref }}" = "refs/heads/main" ]; then
             echo "env=pro" >> $GITHUB_OUTPUT
             echo "aws_region=eu-west-1" >> $GITHUB_OUTPUT
@@ -109,9 +117,7 @@ jobs:
           IMAGE_TAG: ${{ steps.tag.outputs.tag }}
         run: docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG ./app
 
-  # ======================================================================================
-  # FASE 2: ESCANEO DE SEGURIDAD DE LA IMAGEN
-  # ======================================================================================
+  # --- STAGE 2: IMAGE SECURITY SCAN ---
   security-scan-trivy:
     name: Trivy Image Scan
     needs: build-docker-image
@@ -130,9 +136,7 @@ jobs:
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
 
-  # ======================================================================================
-  # FASE 3: PUBLICACIÓN DE ARTEFACTOS
-  # ======================================================================================
+  # --- STAGE 3: PUBLISH ARTIFACTS ---
   publish-artifacts:
     name: Publish Artifacts to ECR
     needs: [security-scan-trivy, code-quality-sonar]
@@ -159,6 +163,9 @@ jobs:
         run: docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
       - name: Setup Helm
         uses: azure/setup-helm@v3
+      # --- HELM DEPENDENCY UPDATE ---
+      - name: Update Helm Chart Dependencies
+        run: helm dependency update ./kubernetes/helm-charts/hello-birthday
       - name: Package and Push Helm Chart to ECR
         env:
           ECR_REGISTRY_ALIAS: ${{ steps.login-ecr.outputs.registry_alias }}
@@ -168,13 +175,41 @@ jobs:
           helm package ./kubernetes/helm-charts/hello-birthday --version $CHART_VERSION
           helm push hello-birthday-$CHART_VERSION.tgz oci://$ECR_REGISTRY_ALIAS/$ECR_REPOSITORY
 
-  # ======================================================================================
-  # FASE 4: DESPLIEGUE DE INFRAESTRUCTURA
-  # ======================================================================================
+  # --- NEW JOB: PREVIEW HELM CHART ON PR ---
+  preview-helm-chart:
+    name: Preview Helm Chart on PR
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+      - name: Update Helm Chart Dependencies
+        run: helm dependency update ./kubernetes/helm-charts/hello-birthday
+      - name: Generate Helm Template
+        id: template
+        run: |
+          helm template hello-birthday-app ./kubernetes/helm-charts/hello-birthday \
+            --values ./kubernetes/helm-charts/hello-birthday/values-staging.yaml > template.yaml
+          echo "output=$(cat template.yaml)" >> $GITHUB_OUTPUT
+      - name: Comment PR with Helm Template
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const output = `#### Helm Template Preview 📝\`\n<details><summary>Click to expand</summary>\n\n\`\`\`yaml\n${{ steps.template.outputs.output }}\n\`\`\`\n</details>`;
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: output
+            });
+
+  # --- STAGE 4: DEPLOY INFRASTRUCTURE ---
   deploy-infrastructure:
     name: Deploy Infrastructure
     runs-on: ubuntu-latest
-    # ... (contenido del job igual que antes) ...
     permissions:
       id-token: write
       contents: read
@@ -206,9 +241,7 @@ jobs:
           cd infra
           terragrunt run-all apply --terragrunt-non-interactive -auto-approve
 
-  # ======================================================================================
-  # FASE 5: DESPLIEGUE DE APLICACIÓN
-  # ======================================================================================
+  # --- STAGE 5: DEPLOY APPLICATION ---
   deploy-application:
     name: Deploy Application to EKS
     needs: [publish-artifacts, deploy-infrastructure]
@@ -225,7 +258,6 @@ jobs:
       - name: Determine Environment
         id: environment
         run: |
-          # ... (código para determinar el entorno, igual que antes) ...
           if [ "${{ github.ref }}" = "refs/heads/main" ]; then
             echo "env=pro" >> $GITHUB_OUTPUT
             echo "aws_region=eu-west-1" >> $GITHUB_OUTPUT
@@ -258,3 +290,37 @@ jobs:
             --namespace default \
             --values ./kubernetes/helm-charts/hello-birthday/values-${{ steps.environment.outputs.env }}.yaml \
             --wait
+
+  # --- TEST HELM RELEASE ---
+  test-helm-release:
+    name: Test Helm Release
+    needs: deploy-application
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Determine Environment
+        id: environment
+        run: |
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "env=pro" >> $GITHUB_OUTPUT
+            echo "aws_region=eu-west-1" >> $GITHUB_OUTPUT
+            echo "cluster_name=eks-pro-birthday" >> $GITHUB_OUTPUT
+          else
+            echo "env=staging" >> $GITHUB_OUTPUT
+            echo "aws_region=eu-west-1" >> $GITHUB_OUTPUT
+            echo "cluster_name=eks-staging-birthday" >> $GITHUB_OUTPUT
+          fi
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: ${{ secrets.AWS_IAM_ROLE_ARN }}
+          aws-region: ${{ steps.environment.outputs.aws_region }}
+      - name: Setup Kubeconfig for EKS
+        run: aws eks update-kubeconfig --name ${{ steps.environment.outputs.cluster_name }} --region ${{ steps.environment.outputs.aws_region }}
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+      - name: Run Helm Test
+        run: helm test hello-birthday-app --namespace default

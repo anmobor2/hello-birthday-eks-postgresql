@@ -183,3 +183,7 @@ ingress:
         - path: /
           pathType: Prefix
   tls: []
+
+# Database Migration Job Configuration
+migrations:
+  enabled: true
