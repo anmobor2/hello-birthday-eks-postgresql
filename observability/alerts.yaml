@@ -1,0 +1,92 @@
+groups:
+  - name: hello-birthday.rules
+    rules:
+      # ---------- APP (FastAPI) ----------
+      - alert: HelloBirthdayHighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{job="hello-birthday-app",status=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total{job="hello-birthday-app"}[5m]))
+          ) * 100 > 2
+        for: 10m
+        labels:
+          severity: warning
+          service: hello-birthday
+        annotations:
+          summary: "High 5xx error rate (>2%)"
+          description: "5xx error rate is above 2% for the last 10 minutes."
+          runbook_url: "https://github.com/anmobor2/hello-birthday-eks-postgresql/blob/main/observability/RUNBOOK.md#high-error-rate"
+
+      - alert: HelloBirthdaySevereErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{job="hello-birthday-app",status=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total{job="hello-birthday-app"}[5m]))
+          ) * 100 > 10
+        for: 5m
+        labels:
+          severity: critical
+          service: hello-birthday
+        annotations:
+          summary: "Severe 5xx error rate (>10%)"
+          description: "5xx error rate is above 10% for 5 minutes."
+          runbook_url: "https://github.com/anmobor2/hello-birthday-eks-postgresql/blob/main/observability/RUNBOOK.md#high-error-rate"
+
+      - alert: HelloBirthdayHighLatencyP95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(http_request_duration_seconds_bucket{job="hello-birthday-app"}[5m])) by (le)
+          ) > 0.4
+        for: 10m
+        labels:
+          severity: warning
+          service: hello-birthday
+        annotations:
+          summary: "High request latency p95 (>400ms)"
+          description: "The 95th percentile latency is above 400ms for 10 minutes."
+          runbook_url: "https://github.com/anmobor2/hello-birthday-eks-postgresql/blob/main/observability/RUNBOOK.md#high-latency"
+
+      # ---------- DB (PostgreSQL via postgres-exporter) ----------
+      - alert: PostgresInstanceDown
+        expr: min(pg_up{job="postgresql"}) == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: hello-birthday
+          component: postgres
+        annotations:
+          summary: "PostgreSQL exporter reports instance down"
+          description: "At least one PostgreSQL instance appears to be down."
+          runbook_url: "https://github.com/anmobor2/hello-birthday-eks-postgresql/blob/main/observability/RUNBOOK.md#postgres-down"
+
+      - alert: PostgresReplicationLagHigh
+        expr: |
+          max(
+            # prefer seconds if available
+            pg_replication_lag{job="postgresql"}
+            OR pg_replication_lag_seconds{job="postgresql"}
+          ) > 30
+        for: 10m
+        labels:
+          severity: warning
+          service: hello-birthday
+          component: postgres
+        annotations:
+          summary: "Replication lag is high (>30s)"
+          description: "The maximum replication lag across replicas is above 30 seconds."
+          runbook_url: "https://github.com/anmobor2/hello-birthday-eks-postgresql/blob/main/observability/RUNBOOK.md#replication-lag"
+
+      - alert: PostgresExporterScrapeError
+        expr: pg_exporter_last_scrape_error{job="postgresql"} > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: hello-birthday
+          component: postgres
+        annotations:
+          summary: "postgres-exporter scrape error"
+          description: "postgres-exporter is reporting scrape errors."
+          runbook_url: "https://github.com/anmobor2/hello-birthday-eks-postgresql/blob/main/observability/RUNBOOK.md#exporter-errors"
