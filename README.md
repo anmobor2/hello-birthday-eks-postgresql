@@ -136,6 +136,8 @@ graph TD
 
 ### PYTHON APP
 
+uvicorn app.main:app --reload
+
 curl -X PUT "http://localhost:8000/hello/antonio" \
   -H "Content-Type: application/json" \
   -d '{"dateOfBirth":"1990-08-12"}'
